@@ -72,6 +72,15 @@
   .block.dragging{opacity:.75; z-index:30; box-shadow:0 8px 20px rgba(27,36,55,.35);}
   .ghost{position:absolute; left:4px; right:4px; border:2px dashed var(--ink); border-radius:8px;
     background:rgba(27,36,55,.06); z-index:2; pointer-events:none;}
+  .gblock{position:absolute; left:4px; right:4px; border-radius:8px; padding:3px 8px 3px 10px; overflow:hidden;
+    background:repeating-linear-gradient(135deg,#fff,#fff 6px,#f3f5f9 6px,#f3f5f9 12px);
+    border:1px solid var(--line); border-left:3px solid var(--ink); color:var(--ink);
+    font-size:11px; font-weight:600; line-height:1.25; z-index:1; pointer-events:none;}
+  .gblock .t{font-weight:500; font-size:10px; color:var(--muted);}
+  .allday{position:absolute; top:2px; left:4px; right:4px; z-index:3; display:flex; flex-direction:column; gap:2px; pointer-events:none;}
+  .allday span{background:var(--ink); color:#fff; border-radius:6px; font-size:10px; font-weight:600;
+    padding:2px 7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .helptext{font-size:12px; color:var(--muted); margin:-4px 0 10px; line-height:1.5;}
 
   /* ---------- chore tray ---------- */
   .tray{position:fixed; left:0; right:0; bottom:0; z-index:45; background:var(--surface);
@@ -144,6 +153,7 @@ const DAYS = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 
 let S = {
   session:null, buckets:[], chores:[], blocks:[],
+  gcal:[], icsUrl:null, gcalErr:null,
   weekStart:null,           // Date (Sunday, local midnight)
   armedChore:null,          // chore chip waiting for tap-placement
   drag:null,                // active pointer drag
@@ -168,18 +178,42 @@ function weekLabel(){ const a=S.weekStart, b=new Date(a); b.setDate(b.getDate()+
 async function loadAll(){
   const uid = S.session.user.id;
   const [st, ch, bl] = await Promise.all([
-    sb.from("user_settings").select("buckets").eq("user_id", uid).maybeSingle(),
+    sb.from("user_settings").select("buckets, calendar_ics_url").eq("user_id", uid).maybeSingle(),
     sb.from("chores").select("*").order("sort").order("created_at"),
     sb.from("scheduled_blocks").select("*").eq("week_start", ymd(S.weekStart)),
   ]);
   if(st.data && st.data.buckets) S.buckets = st.data.buckets;
+  if(st.data) S.icsUrl = st.data.calendar_ics_url || null;
   S.chores = ch.data || [];
   S.blocks = bl.data || [];
   render();
+  fetchGcal();
 }
 async function loadWeek(){
   const {data} = await sb.from("scheduled_blocks").select("*").eq("week_start", ymd(S.weekStart));
   S.blocks = data || []; render();
+  fetchGcal();
+}
+async function fetchGcal(){
+  if(!S.icsUrl){ S.gcal=[]; return; }
+  const wk = S.weekStart.getTime();
+  const start = new Date(S.weekStart).toISOString();
+  const endD = new Date(S.weekStart); endD.setDate(endD.getDate()+7);
+  S.gcalErr = null;
+  const {data, error} = await sb.functions.invoke("calendar-feed", {body:{url:S.icsUrl, start, end:endD.toISOString()}});
+  if(S.weekStart.getTime()!==wk) return; // week changed while fetching
+  if(error || (data && data.error)){ S.gcalErr = (data && data.error) || "Calendar unavailable"; S.gcal=[]; render(); return; }
+  S.gcal = (data.events||[]).map(e=>{
+    const d = new Date(e.start);
+    const localDay = e.allDay ? new Date(e.start) : d; // allDay stored as UTC midnight
+    const day = e.allDay
+      ? Math.round((Date.UTC(localDay.getUTCFullYear(),localDay.getUTCMonth(),localDay.getUTCDate()) - Date.UTC(S.weekStart.getFullYear(),S.weekStart.getMonth(),S.weekStart.getDate()))/86400000)
+      : Math.floor((new Date(d.getFullYear(),d.getMonth(),d.getDate()) - S.weekStart)/86400000);
+    return { title:e.title, allDay:e.allDay, day,
+      start_min: e.allDay?0:(d.getHours()*60+d.getMinutes()),
+      end_min: e.allDay?0:Math.max((new Date(e.end).getTime()-e.start)/60000 + d.getHours()*60+d.getMinutes(), d.getHours()*60+d.getMinutes()+15) };
+  }).filter(e=>e.day>=0 && e.day<=6);
+  render();
 }
 async function saveBuckets(){
   await sb.from("user_settings").update({buckets:S.buckets, updated_at:new Date().toISOString()}).eq("user_id", S.session.user.id);
@@ -262,9 +296,12 @@ function dayHTML(d){
   const date = new Date(S.weekStart); date.setDate(date.getDate()+d);
   const isToday = ymd(date)===ymd(new Date());
   const blocks = S.blocks.filter(b=>b.day===d).map(blockHTML).join("");
+  const gev = S.gcal.filter(e=>e.day===d && !e.allDay).map(gblockHTML).join("");
+  const allday = S.gcal.filter(e=>e.day===d && e.allDay);
+  const alldayHTML = allday.length ? `<div class="allday">${allday.map(e=>`<span>◦ ${esc(e.title)}</span>`).join("")}</div>` : "";
   return `<div class="daycol">
     <div class="dayhead ${isToday?"today":""}"><span class="d">${DAYS[d]}</span><span class="n num">${date.getDate()}</span></div>
-    <div class="slots ${S.armedChore?"placing":""}" data-day="${d}">${blocks}</div>
+    <div class="slots ${S.armedChore?"placing":""}" data-day="${d}">${alldayHTML}${gev}${blocks}</div>
   </div>`;
 }
 function blockHTML(b){
@@ -273,6 +310,15 @@ function blockHTML(b){
   const col = bucket(b.bucket_id).color;
   return `<div class="block" data-block="${b.id}" style="top:${top}px;height:${h-2}px;background:${col}">
     ${esc(b.title)} <span class="t num">${fmtTime(b.start_min)} · ${fmtDur(b.duration_min)}</span>
+  </div>`;
+}
+function gblockHTML(e){
+  const s = Math.max(e.start_min, GRID_START), en = Math.min(e.end_min, GRID_END);
+  if(en<=GRID_START || s>=GRID_END) return "";
+  const top = (s-GRID_START)/SLOT*SLOT_H;
+  const h = Math.max((en-s)/SLOT*SLOT_H, 16);
+  return `<div class="gblock" style="top:${top}px;height:${h-2}px">
+    ${esc(e.title)} <span class="t num">${fmtTime(e.start_min)}</span>
   </div>`;
 }
 function chipHTML(c){
@@ -334,6 +380,11 @@ function settingsSheet(){
         <input type="number" value="${b.max}" data-bmax="${i}" min="0" max="120" style="width:52px;border:1px solid var(--line);border-radius:7px;padding:6px 6px" aria-label="Max hours">
         <span class="sub">h</span>
       </div>`).join("")}
+    <div class="divider"></div>
+    <h2 style="font-size:18px">GOOGLE CALENDAR</h2>
+    <p class="helptext">Google Calendar → Settings → your calendar → <b>Integrate calendar</b> → copy the <b>Secret address in iCal format</b> and paste it here. Your events will show on the grid so you can plan around them.</p>
+    <div class="frow"><label>ICS URL</label><input id="sIcs" value="${esc(S.icsUrl||"")}" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"></div>
+    ${S.gcalErr?`<p class="helptext" style="color:#b3261e">⚠ ${esc(S.gcalErr)}</p>`:""}
     <div class="divider"></div>
     <h2 style="font-size:18px">CHORE LIBRARY</h2>
     ${S.chores.map(c=>`
@@ -427,7 +478,12 @@ async function act(a){
       const mn=document.querySelector(`[data-bmin="${i}"]`); if(mn) b.min=Math.max(0,+mn.value||0);
       const mx=document.querySelector(`[data-bmax="${i}"]`); if(mx) b.max=Math.max(b.min,+mx.value||0);
     });
-    S.sheet=null; render(); await saveBuckets(); toast("Targets saved");
+    const icsEl=document.querySelector("#sIcs"); const newIcs=icsEl?(icsEl.value.trim()||null):S.icsUrl;
+    const icsChanged = newIcs!==S.icsUrl; S.icsUrl=newIcs;
+    S.sheet=null; render();
+    await sb.from("user_settings").update({buckets:S.buckets, calendar_ics_url:S.icsUrl, updated_at:new Date().toISOString()}).eq("user_id", S.session.user.id);
+    toast("Settings saved");
+    if(icsChanged) fetchGcal();
   }
   if(a==="signout"){ await sb.auth.signOut(); S.session=null; render(); }
 }
