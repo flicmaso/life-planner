@@ -154,6 +154,7 @@ const DAYS = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 let S = {
   session:null, buckets:[], chores:[], blocks:[],
   gcal:[], icsUrl:null, gcalErr:null,
+  gcalConn:false, gcalSync:false, gcalClientId:"", gcalClientSecret:"", pendingCode:null,
   weekStart:null,           // Date (Sunday, local midnight)
   armedChore:null,          // chore chip waiting for tap-placement
   drag:null,                // active pointer drag
@@ -178,15 +179,28 @@ function weekLabel(){ const a=S.weekStart, b=new Date(a); b.setDate(b.getDate()+
 async function loadAll(){
   const uid = S.session.user.id;
   const [st, ch, bl] = await Promise.all([
-    sb.from("user_settings").select("buckets, calendar_ics_url").eq("user_id", uid).maybeSingle(),
+    sb.from("user_settings").select("buckets, calendar_ics_url, gcal_client_id, gcal_client_secret, gcal_refresh_token, gcal_sync").eq("user_id", uid).maybeSingle(),
     sb.from("chores").select("*").order("sort").order("created_at"),
     sb.from("scheduled_blocks").select("*").eq("week_start", ymd(S.weekStart)),
   ]);
   if(st.data && st.data.buckets) S.buckets = st.data.buckets;
-  if(st.data) S.icsUrl = st.data.calendar_ics_url || null;
+  if(st.data){
+    S.icsUrl = st.data.calendar_ics_url || null;
+    S.gcalClientId = st.data.gcal_client_id || "";
+    S.gcalClientSecret = st.data.gcal_client_secret || "";
+    S.gcalConn = !!st.data.gcal_refresh_token;
+    S.gcalSync = !!st.data.gcal_sync;
+  }
   S.chores = ch.data || [];
   S.blocks = bl.data || [];
   render();
+  if(S.pendingCode){
+    const code = S.pendingCode; S.pendingCode = null;
+    toast("Connecting Google…");
+    const {data, error} = await sb.functions.invoke("gcal", {body:{action:"exchange", code, redirect_uri: location.origin+location.pathname}});
+    if(error || (data && data.error)){ toast("Google connect failed"); }
+    else { S.gcalConn = true; S.gcalSync = true; toast("Google Calendar connected ✓"); render(); }
+  }
   fetchGcal();
 }
 async function loadWeek(){
@@ -203,7 +217,8 @@ async function fetchGcal(){
   const {data, error} = await sb.functions.invoke("calendar-feed", {body:{url:S.icsUrl, start, end:endD.toISOString()}});
   if(S.weekStart.getTime()!==wk) return; // week changed while fetching
   if(error || (data && data.error)){ S.gcalErr = (data && data.error) || "Calendar unavailable"; S.gcal=[]; render(); return; }
-  S.gcal = (data.events||[]).map(e=>{
+  const mine = new Set(S.blocks.filter(b=>b.gcal_event_id).map(b=>b.gcal_event_id));
+  S.gcal = (data.events||[]).filter(e=>!mine.has(String(e.uid||"").split("@")[0])).map(e=>{
     const d = new Date(e.start);
     const localDay = e.allDay ? new Date(e.start) : d; // allDay stored as UTC midnight
     const day = e.allDay
@@ -218,21 +233,43 @@ async function fetchGcal(){
 async function saveBuckets(){
   await sb.from("user_settings").update({buckets:S.buckets, updated_at:new Date().toISOString()}).eq("user_id", S.session.user.id);
 }
+function blockISO(day, startMin, durMin){
+  const d = new Date(S.weekStart); d.setDate(d.getDate()+day); d.setMinutes(startMin);
+  const e = new Date(d); e.setMinutes(e.getMinutes()+durMin);
+  return {start:d.toISOString(), end:e.toISOString()};
+}
+async function gcalPush(action, payload){
+  if(!(S.gcalSync && S.gcalConn)) return null;
+  const {data, error} = await sb.functions.invoke("gcal", {body:{action, ...payload}});
+  if(error || (data && data.error)){ toast("Google sync failed — saved locally"); return null; }
+  return data;
+}
 async function placeBlock(chore, day, start){
   const row = { week_start:ymd(S.weekStart), day, start_min:start, duration_min:chore.duration_min,
     title:chore.name, bucket_id:chore.bucket_id, chore_id:chore.id };
   const {data,error} = await sb.from("scheduled_blocks").insert(row).select().single();
   if(error){ toast("Couldn't place — try again"); return; }
   S.blocks.push(data); render(); toast(chore.name+" → "+DAYS[day]+" "+fmtTime(start));
+  const iso = blockISO(day, start, chore.duration_min);
+  const res = await gcalPush("create", {title:chore.name, ...iso});
+  if(res && res.eventId){
+    data.gcal_event_id = res.eventId;
+    await sb.from("scheduled_blocks").update({gcal_event_id:res.eventId}).eq("id", data.id);
+  }
 }
 async function updateBlock(b, patch){
   Object.assign(b, patch);
   render();
   await sb.from("scheduled_blocks").update(patch).eq("id", b.id);
+  if(b.gcal_event_id){
+    const iso = blockISO(b.day, b.start_min, b.duration_min);
+    await gcalPush("update", {eventId:b.gcal_event_id, title:b.title, ...iso});
+  }
 }
 async function deleteBlock(b){
   S.blocks = S.blocks.filter(x=>x.id!==b.id); render();
   await sb.from("scheduled_blocks").delete().eq("id", b.id);
+  if(b.gcal_event_id) await gcalPush("delete", {eventId:b.gcal_event_id});
 }
 
 /* ---------------- render ---------------- */
@@ -386,6 +423,20 @@ function settingsSheet(){
     <div class="frow"><label>ICS URL</label><input id="sIcs" value="${esc(S.icsUrl||"")}" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"></div>
     ${S.gcalErr?`<p class="helptext" style="color:#b3261e">⚠ ${esc(S.gcalErr)}</p>`:""}
     <div class="divider"></div>
+    <h2 style="font-size:18px">TWO-WAY SYNC</h2>
+    <p class="helptext">${S.gcalConn
+      ? `Connected ✓ — placed chores become real Google Calendar events; moving or removing them updates Google too.`
+      : `Push placed chores to Google Calendar as real events. Needs a one-time Google Cloud OAuth client (see setup steps). Paste both values, Save & close, then reopen Settings and tap Connect.`}</p>
+    ${S.gcalConn ? `
+    <div class="frow"><label>Sync</label>
+      <select id="sSync"><option value="1" ${S.gcalSync?"selected":""}>On — push chores to Google</option><option value="0" ${!S.gcalSync?"selected":""}>Paused</option></select></div>
+    <div class="btnrow" style="margin-top:4px"><button class="btn danger" data-act="gdisconnect">Disconnect Google</button></div>
+    ` : `
+    <div class="frow"><label>Client ID</label><input id="sCid" value="${esc(S.gcalClientId)}" placeholder="…apps.googleusercontent.com"></div>
+    <div class="frow"><label>Secret</label><input id="sCsec" type="password" value="${esc(S.gcalClientSecret)}" placeholder="GOCSPX-…"></div>
+    ${S.gcalClientId?`<div class="btnrow" style="margin-top:4px"><button class="btn primary" data-act="gconnect">Connect Google Calendar</button></div>`:""}
+    `}
+    <div class="divider"></div>
     <h2 style="font-size:18px">CHORE LIBRARY</h2>
     ${S.chores.map(c=>`
       <div class="listrow">
@@ -480,10 +531,33 @@ async function act(a){
     });
     const icsEl=document.querySelector("#sIcs"); const newIcs=icsEl?(icsEl.value.trim()||null):S.icsUrl;
     const icsChanged = newIcs!==S.icsUrl; S.icsUrl=newIcs;
+    const cidEl=document.querySelector("#sCid"); if(cidEl) S.gcalClientId=cidEl.value.trim();
+    const csecEl=document.querySelector("#sCsec"); if(csecEl) S.gcalClientSecret=csecEl.value.trim();
+    const syncEl=document.querySelector("#sSync"); if(syncEl) S.gcalSync = syncEl.value==="1";
     S.sheet=null; render();
-    await sb.from("user_settings").update({buckets:S.buckets, calendar_ics_url:S.icsUrl, updated_at:new Date().toISOString()}).eq("user_id", S.session.user.id);
+    await sb.from("user_settings").update({buckets:S.buckets, calendar_ics_url:S.icsUrl,
+      gcal_client_id:S.gcalClientId||null, gcal_client_secret:S.gcalClientSecret||null, gcal_sync:S.gcalSync,
+      updated_at:new Date().toISOString()}).eq("user_id", S.session.user.id);
     toast("Settings saved");
     if(icsChanged) fetchGcal();
+  }
+  if(a==="gconnect"){
+    // persist creds, then send to Google consent
+    await sb.from("user_settings").update({gcal_client_id:S.gcalClientId, gcal_client_secret:S.gcalClientSecret}).eq("user_id", S.session.user.id);
+    const p = new URLSearchParams({
+      client_id: (document.querySelector("#sCid")?document.querySelector("#sCid").value.trim():S.gcalClientId),
+      redirect_uri: location.origin+location.pathname,
+      response_type: "code",
+      scope: "https://www.googleapis.com/auth/calendar.events",
+      access_type: "offline",
+      prompt: "consent",
+    });
+    location.href = "https://accounts.google.com/o/oauth2/v2/auth?"+p.toString();
+  }
+  if(a==="gdisconnect"){
+    S.gcalConn=false; S.gcalSync=false; S.sheet=null; render();
+    await sb.functions.invoke("gcal",{body:{action:"disconnect"}});
+    toast("Google disconnected");
   }
   if(a==="signout"){ await sb.auth.signOut(); S.session=null; render(); }
 }
@@ -540,6 +614,8 @@ function renderAuth(){
 
 /* ---------------- boot ---------------- */
 (async function(){
+  const qp = new URLSearchParams(location.search);
+  if(qp.get("code")){ S.pendingCode = qp.get("code"); history.replaceState({}, "", location.pathname); }
   S.weekStart = sundayOf(new Date());
   const {data} = await sb.auth.getSession();
   if(data && data.session){ S.session=data.session; await loadAll(); } else render();
