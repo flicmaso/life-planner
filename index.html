@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>The Week — Life Allocation Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;700;800&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#eef1f5; --surface:#ffffff; --ink:#1b2437; --muted:#66708a;
+    --line:#d9dee8; --line-soft:#e7ebf1; --shadow:0 1px 2px rgba(27,36,55,.06),0 8px 24px rgba(27,36,55,.08);
+    --radius:12px; --slot-h:22px; --grid-start:360; --grid-end:1320; /* 6:00–22:00 in minutes */
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--ink);
+    font-family:"Public Sans",system-ui,sans-serif; font-size:15px; line-height:1.45;}
+  button{font-family:inherit; cursor:pointer;}
+  input,select{font-family:inherit; font-size:15px;}
+  .display{font-family:"Big Shoulders Display",sans-serif;}
+  .num{font-variant-numeric:tabular-nums;}
+
+  /* ---------- header ---------- */
+  header{position:sticky; top:0; z-index:40; background:var(--bg);
+    border-bottom:1px solid var(--line); padding:10px 14px 8px;}
+  .hrow{display:flex; align-items:center; justify-content:space-between; gap:8px;}
+  .wordmark{font-family:"Big Shoulders Display"; font-weight:800; font-size:26px; letter-spacing:.04em; line-height:1;}
+  .wordmark span{color:var(--muted); font-weight:500;}
+  .weeknav{display:flex; align-items:center; gap:6px;}
+  .weeknav button{background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    width:34px; height:34px; font-size:16px; color:var(--ink);}
+  .weeklabel{font-weight:600; font-size:14px; min-width:118px; text-align:center;}
+  .iconbtn{background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    height:34px; padding:0 12px; font-size:14px; font-weight:600; color:var(--ink);}
+
+  /* ---------- bucket gauges (signature) ---------- */
+  .gauges{display:flex; gap:10px; overflow-x:auto; padding:12px 14px; scrollbar-width:none;}
+  .gauges::-webkit-scrollbar{display:none;}
+  .gauge{flex:0 0 148px; background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius); padding:10px 12px 12px; box-shadow:var(--shadow);}
+  .gname{font-size:12px; font-weight:600; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .gval{font-family:"Big Shoulders Display"; font-weight:700; font-size:24px; line-height:1.1; margin:2px 0 6px;}
+  .gval small{font-size:13px; color:var(--muted); font-family:"Public Sans"; font-weight:500;}
+  .gtrack{position:relative; height:10px; border-radius:5px; background:var(--line-soft); overflow:visible;}
+  .gband{position:absolute; top:-3px; bottom:-3px; border-left:2px solid var(--ink); border-right:2px solid var(--ink);
+    opacity:.28; border-radius:2px;}
+  .gfill{position:absolute; left:0; top:0; bottom:0; border-radius:5px; transition:width .3s;}
+  .gstate{font-size:11px; font-weight:600; margin-top:8px; color:var(--muted);}
+  .gstate.on{color:#0f7a4d;} .gstate.over{color:#b3541e;}
+
+  /* ---------- week grid ---------- */
+  .gridwrap{display:flex; overflow-x:auto; scroll-snap-type:x mandatory; padding:0 0 8px;}
+  .timerail{flex:0 0 44px; position:sticky; left:0; z-index:5; background:var(--bg); padding-top:34px;}
+  .timerail div{height:calc(var(--slot-h)*2); font-size:10px; color:var(--muted);
+    text-align:right; padding-right:6px; transform:translateY(-6px);}
+  .daycol{flex:0 0 76vw; max-width:240px; scroll-snap-align:start; padding:0 4px;}
+  @media(min-width:900px){ .daycol{flex:1 1 0; max-width:none;} .gridwrap{padding:0 14px 8px;} }
+  .dayhead{position:sticky; top:0; display:flex; align-items:baseline; gap:6px; height:34px;
+    padding:6px 6px 2px; background:var(--bg); z-index:4;}
+  .dayhead .d{font-family:"Big Shoulders Display"; font-weight:700; font-size:18px; letter-spacing:.05em;}
+  .dayhead .n{font-size:12px; color:var(--muted);}
+  .dayhead.today .d{color:#0f7a4d;}
+  .slots{position:relative; background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    height:calc(var(--slot-h)*32); background-image:repeating-linear-gradient(to bottom,
+      transparent, transparent calc(var(--slot-h)*2 - 1px), var(--line-soft) calc(var(--slot-h)*2 - 1px), var(--line-soft) calc(var(--slot-h)*2));}
+  .slots.placing{outline:2px dashed var(--ink); outline-offset:2px;}
+  .block{position:absolute; left:4px; right:4px; border-radius:8px; padding:3px 8px; overflow:hidden;
+    color:#fff; font-size:12px; font-weight:600; line-height:1.25; box-shadow:0 1px 3px rgba(27,36,55,.25);
+    touch-action:none; user-select:none; -webkit-user-select:none;}
+  .block .t{font-weight:500; font-size:10px; opacity:.9;}
+  .block.dragging{opacity:.75; z-index:30; box-shadow:0 8px 20px rgba(27,36,55,.35);}
+  .ghost{position:absolute; left:4px; right:4px; border:2px dashed var(--ink); border-radius:8px;
+    background:rgba(27,36,55,.06); z-index:2; pointer-events:none;}
+
+  /* ---------- chore tray ---------- */
+  .tray{position:fixed; left:0; right:0; bottom:0; z-index:45; background:var(--surface);
+    border-top:1px solid var(--line); box-shadow:0 -6px 24px rgba(27,36,55,.10); padding:8px 14px calc(10px + env(safe-area-inset-bottom));}
+  .traytop{display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;}
+  .traytop b{font-size:13px; letter-spacing:.02em;}
+  .traytop .hint{font-size:12px; color:var(--muted);}
+  .chips{display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; padding-bottom:2px;}
+  .chips::-webkit-scrollbar{display:none;}
+  .chip{flex:0 0 auto; display:flex; align-items:center; gap:7px; border:1.5px solid var(--line);
+    background:var(--surface); border-radius:999px; padding:7px 12px; font-size:13px; font-weight:600; color:var(--ink);
+    touch-action:none; user-select:none; -webkit-user-select:none;}
+  .chip .dot{width:9px; height:9px; border-radius:50%;}
+  .chip .min{color:var(--muted); font-weight:500; font-size:12px;}
+  .chip.armed{border-color:var(--ink); background:var(--ink); color:#fff;}
+  .chip.armed .min{color:#cdd3e0;}
+  .chip.addchip{border-style:dashed; color:var(--muted);}
+  main{padding-bottom:96px;}
+
+  /* ---------- sheets / modals ---------- */
+  .scrim{position:fixed; inset:0; background:rgba(27,36,55,.45); z-index:60; display:none;}
+  .scrim.open{display:block;}
+  .sheet{position:fixed; left:0; right:0; bottom:0; z-index:61; background:var(--surface);
+    border-radius:16px 16px 0 0; max-height:86vh; overflow-y:auto; padding:16px 16px calc(20px + env(safe-area-inset-bottom));
+    transform:translateY(105%); transition:transform .22s ease; box-shadow:0 -12px 40px rgba(27,36,55,.25);}
+  .sheet.open{transform:translateY(0);}
+  @media(min-width:900px){ .sheet{left:50%; right:auto; width:520px; transform:translate(-50%,105%);} .sheet.open{transform:translate(-50%,0);} }
+  .sheet h2{font-family:"Big Shoulders Display"; font-weight:700; font-size:22px; letter-spacing:.03em; margin:0 0 12px;}
+  .frow{display:flex; gap:10px; margin-bottom:10px; align-items:center;}
+  .frow label{flex:0 0 92px; font-size:13px; font-weight:600; color:var(--muted);}
+  .frow input,.frow select{flex:1; border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:#fff; min-width:0;}
+  .stepper{display:flex; align-items:center; gap:8px; flex:1;}
+  .stepper button{width:36px; height:36px; border-radius:8px; border:1px solid var(--line); background:#fff; font-size:17px;}
+  .stepper .val{min-width:70px; text-align:center; font-weight:700;}
+  .btnrow{display:flex; gap:10px; margin-top:14px;}
+  .btn{flex:1; border-radius:10px; padding:12px; font-size:15px; font-weight:700; border:1px solid var(--line); background:#fff; color:var(--ink);}
+  .btn.primary{background:var(--ink); border-color:var(--ink); color:#fff;}
+  .btn.danger{color:#b3261e; border-color:#e5b5b2;}
+  .divider{border-top:1px solid var(--line); margin:16px 0 12px;}
+  .listrow{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line-soft); font-size:14px;}
+  .listrow .grow{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .listrow .sub{color:var(--muted); font-size:12px;}
+  .mini{border:1px solid var(--line); background:#fff; border-radius:7px; padding:5px 10px; font-size:12px; font-weight:600;}
+
+  /* ---------- auth ---------- */
+  .auth{max-width:360px; margin:14vh auto 0; background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius); box-shadow:var(--shadow); padding:24px;}
+  .auth h1{font-family:"Big Shoulders Display"; font-weight:800; font-size:34px; margin:0 0 2px; letter-spacing:.04em;}
+  .auth p{color:var(--muted); font-size:13px; margin:0 0 16px;}
+  .auth input{width:100%; border:1px solid var(--line); border-radius:8px; padding:11px 12px; margin-bottom:10px;}
+  .auth .err{color:#b3261e; font-size:13px; min-height:18px; margin:2px 0 6px;}
+  .toast{position:fixed; left:50%; bottom:110px; transform:translateX(-50%); background:var(--ink); color:#fff;
+    padding:9px 16px; border-radius:999px; font-size:13px; font-weight:600; z-index:70; opacity:0; transition:opacity .2s; pointer-events:none;}
+  .toast.show{opacity:1;}
+  @media (prefers-reduced-motion:reduce){ *{transition:none !important;} }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+const SUPABASE_URL = "https://xjfbnbhwwggwddkkoxah.supabase.co";
+const SUPABASE_KEY = "sb_publishable_XeHNo69boEkNNLEa2Logvg_C1swUzFL";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const GRID_START = 360, GRID_END = 1320, SLOT = 30, SLOT_H = 22; // 6:00–22:00
+const DAYS = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
+
+let S = {
+  session:null, buckets:[], chores:[], blocks:[],
+  weekStart:null,           // Date (Sunday, local midnight)
+  armedChore:null,          // chore chip waiting for tap-placement
+  drag:null,                // active pointer drag
+  sheet:null,               // 'settings' | 'block' | 'chore'
+  editBlock:null, editChore:null,
+};
+
+/* ---------------- utils ---------------- */
+const $ = s => document.querySelector(s);
+const esc = t => String(t??"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function sundayOf(d){ const x=new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate()-x.getDay()); return x; }
+function ymd(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function fmtTime(min){ let h=Math.floor(min/60), m=min%60, ap=h>=12?"p":"a"; h=h%12||12; return h+(m?":"+String(m).padStart(2,"0"):"")+ap; }
+function fmtDur(min){ const h=Math.floor(min/60), m=min%60; return (h?h+"h":"")+(m?" "+m+"m":"")||"0m"; }
+function hoursOf(min){ return Math.round(min/6)/10; }
+function bucket(id){ return S.buckets.find(b=>b.id===id) || {id, name:id, color:"#6b7280", min:0, max:0}; }
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._x); t._x=setTimeout(()=>t.classList.remove("show"),2200); }
+function weekLabel(){ const a=S.weekStart, b=new Date(a); b.setDate(b.getDate()+6);
+  const f=d=>d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); return f(a)+" – "+f(b); }
+
+/* ---------------- data ---------------- */
+async function loadAll(){
+  const uid = S.session.user.id;
+  const [st, ch, bl] = await Promise.all([
+    sb.from("user_settings").select("buckets").eq("user_id", uid).maybeSingle(),
+    sb.from("chores").select("*").order("sort").order("created_at"),
+    sb.from("scheduled_blocks").select("*").eq("week_start", ymd(S.weekStart)),
+  ]);
+  if(st.data && st.data.buckets) S.buckets = st.data.buckets;
+  S.chores = ch.data || [];
+  S.blocks = bl.data || [];
+  render();
+}
+async function loadWeek(){
+  const {data} = await sb.from("scheduled_blocks").select("*").eq("week_start", ymd(S.weekStart));
+  S.blocks = data || []; render();
+}
+async function saveBuckets(){
+  await sb.from("user_settings").update({buckets:S.buckets, updated_at:new Date().toISOString()}).eq("user_id", S.session.user.id);
+}
+async function placeBlock(chore, day, start){
+  const row = { week_start:ymd(S.weekStart), day, start_min:start, duration_min:chore.duration_min,
+    title:chore.name, bucket_id:chore.bucket_id, chore_id:chore.id };
+  const {data,error} = await sb.from("scheduled_blocks").insert(row).select().single();
+  if(error){ toast("Couldn't place — try again"); return; }
+  S.blocks.push(data); render(); toast(chore.name+" → "+DAYS[day]+" "+fmtTime(start));
+}
+async function updateBlock(b, patch){
+  Object.assign(b, patch);
+  render();
+  await sb.from("scheduled_blocks").update(patch).eq("id", b.id);
+}
+async function deleteBlock(b){
+  S.blocks = S.blocks.filter(x=>x.id!==b.id); render();
+  await sb.from("scheduled_blocks").delete().eq("id", b.id);
+}
+
+/* ---------------- render ---------------- */
+function render(){
+  if(!S.session){ renderAuth(); return; }
+  const app = $("#app");
+  app.innerHTML = `
+  <header>
+    <div class="hrow">
+      <div class="wordmark">THE WEEK <span>· planner</span></div>
+      <div class="weeknav">
+        <button data-act="prev" aria-label="Previous week">‹</button>
+        <div class="weeklabel num">${weekLabel()}</div>
+        <button data-act="next" aria-label="Next week">›</button>
+      </div>
+      <button class="iconbtn" data-act="settings">Settings</button>
+    </div>
+  </header>
+  <main>
+    <div class="gauges">${S.buckets.map(gaugeHTML).join("")}</div>
+    <div class="gridwrap" id="grid">
+      <div class="timerail">${railHTML()}</div>
+      ${[0,1,2,3,4,5,6].map(dayHTML).join("")}
+    </div>
+  </main>
+  <div class="tray">
+    <div class="traytop">
+      <b>PLAN MY WEEK</b>
+      <span class="hint">${S.armedChore ? "Tap an open time to place — tap chip to cancel" : "Tap a chore, then tap the calendar. Long-press a chip to edit."}</span>
+    </div>
+    <div class="chips">
+      ${S.chores.map(chipHTML).join("")}
+      <button class="chip addchip" data-act="addchore">+ New chore</button>
+    </div>
+  </div>
+  ${sheetHTML()}
+  <div class="scrim ${S.sheet?"open":""}" data-act="closesheet"></div>`;
+  wire();
+  if(S.sheet) requestAnimationFrame(()=>{ const sh=$(".sheet"); if(sh) sh.classList.add("open"); });
+}
+
+function gaugeHTML(b){
+  const planned = hoursOf(S.blocks.filter(x=>x.bucket_id===b.id).reduce((a,x)=>a+x.duration_min,0));
+  const scaleMax = Math.max(b.max*1.25, planned, 1);
+  const pct = v => Math.min(100, v/scaleMax*100);
+  const state = planned>b.max ? ["over","Over plan"] : planned>=b.min ? ["on","On plan ✓"] : ["", (b.min-planned).toFixed(1).replace(/\.0$/,"")+"h to go"];
+  return `<div class="gauge">
+    <div class="gname">${esc(b.name)}</div>
+    <div class="gval num">${planned}<small> / ${b.min}–${b.max}h</small></div>
+    <div class="gtrack">
+      <div class="gband" style="left:${pct(b.min)}%;width:${pct(b.max)-pct(b.min)}%"></div>
+      <div class="gfill" style="width:${pct(planned)}%;background:${b.color}"></div>
+    </div>
+    <div class="gstate ${state[0]}">${state[1]}</div>
+  </div>`;
+}
+function railHTML(){
+  let out=""; for(let m=GRID_START;m<GRID_END;m+=60) out+=`<div class="num">${fmtTime(m)}</div>`; return out;
+}
+function dayHTML(d){
+  const date = new Date(S.weekStart); date.setDate(date.getDate()+d);
+  const isToday = ymd(date)===ymd(new Date());
+  const blocks = S.blocks.filter(b=>b.day===d).map(blockHTML).join("");
+  return `<div class="daycol">
+    <div class="dayhead ${isToday?"today":""}"><span class="d">${DAYS[d]}</span><span class="n num">${date.getDate()}</span></div>
+    <div class="slots ${S.armedChore?"placing":""}" data-day="${d}">${blocks}</div>
+  </div>`;
+}
+function blockHTML(b){
+  const top = (b.start_min-GRID_START)/SLOT*SLOT_H;
+  const h = Math.max(b.duration_min/SLOT*SLOT_H, 18);
+  const col = bucket(b.bucket_id).color;
+  return `<div class="block" data-block="${b.id}" style="top:${top}px;height:${h-2}px;background:${col}">
+    ${esc(b.title)} <span class="t num">${fmtTime(b.start_min)} · ${fmtDur(b.duration_min)}</span>
+  </div>`;
+}
+function chipHTML(c){
+  const placed = S.blocks.filter(b=>b.chore_id===c.id).length;
+  return `<button class="chip ${S.armedChore&&S.armedChore.id===c.id?"armed":""}" data-chore="${c.id}">
+    <span class="dot" style="background:${bucket(c.bucket_id).color}"></span>
+    ${esc(c.name)} <span class="min num">${fmtDur(c.duration_min)}${placed?" · ×"+placed:""}</span>
+  </button>`;
+}
+
+/* ---------------- sheets ---------------- */
+function sheetHTML(){
+  if(S.sheet==="block" && S.editBlock) return blockSheet(S.editBlock);
+  if(S.sheet==="chore") return choreSheet(S.editChore);
+  if(S.sheet==="settings") return settingsSheet();
+  return "";
+}
+function blockSheet(b){
+  return `<div class="sheet">
+    <h2>${esc(b.title)}</h2>
+    <div class="frow"><label>Day</label>
+      <select id="bDay">${DAYS.map((d,i)=>`<option value="${i}" ${i===b.day?"selected":""}>${d}</option>`).join("")}</select></div>
+    <div class="frow"><label>Starts</label>
+      <div class="stepper"><button data-step="start:-30">−</button><div class="val num" id="bStart">${fmtTime(b.start_min)}</div><button data-step="start:30">+</button></div></div>
+    <div class="frow"><label>Duration</label>
+      <div class="stepper"><button data-step="dur:-15">−</button><div class="val num" id="bDur">${fmtDur(b.duration_min)}</div><button data-step="dur:15">+</button></div></div>
+    <div class="frow"><label>Bucket</label>
+      <select id="bBucket">${S.buckets.map(k=>`<option value="${k.id}" ${k.id===b.bucket_id?"selected":""}>${esc(k.name)}</option>`).join("")}</select></div>
+    <div class="btnrow">
+      <button class="btn danger" data-act="delblock">Remove</button>
+      <button class="btn primary" data-act="saveblock">Done</button>
+    </div>
+  </div>`;
+}
+function choreSheet(c){
+  const isNew = !c.id;
+  return `<div class="sheet">
+    <h2>${isNew?"NEW CHORE":"EDIT CHORE"}</h2>
+    <div class="frow"><label>Name</label><input id="cName" value="${esc(c.name||"")}" placeholder="e.g. Water plants"></div>
+    <div class="frow"><label>Time</label>
+      <div class="stepper"><button data-step="cdur:-5">−</button><div class="val num" id="cDur">${fmtDur(c.duration_min||30)}</div><button data-step="cdur:5">+</button></div></div>
+    <div class="frow"><label>Bucket</label>
+      <select id="cBucket">${S.buckets.map(k=>`<option value="${k.id}" ${k.id===(c.bucket_id||"cleaning")?"selected":""}>${esc(k.name)}</option>`).join("")}</select></div>
+    <div class="btnrow">
+      ${isNew?"":'<button class="btn danger" data-act="delchore">Delete</button>'}
+      <button class="btn primary" data-act="savechore">${isNew?"Add chore":"Save"}</button>
+    </div>
+  </div>`;
+}
+function settingsSheet(){
+  return `<div class="sheet">
+    <h2>BUCKETS & TARGETS</h2>
+    ${S.buckets.map((b,i)=>`
+      <div class="listrow">
+        <span class="dot" style="width:10px;height:10px;border-radius:50%;background:${b.color};flex:0 0 auto"></span>
+        <input value="${esc(b.name)}" data-bname="${i}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:6px 8px;min-width:0">
+        <input type="number" value="${b.min}" data-bmin="${i}" min="0" max="99" style="width:52px;border:1px solid var(--line);border-radius:7px;padding:6px 6px" aria-label="Min hours">
+        <span class="sub">–</span>
+        <input type="number" value="${b.max}" data-bmax="${i}" min="0" max="120" style="width:52px;border:1px solid var(--line);border-radius:7px;padding:6px 6px" aria-label="Max hours">
+        <span class="sub">h</span>
+      </div>`).join("")}
+    <div class="divider"></div>
+    <h2 style="font-size:18px">CHORE LIBRARY</h2>
+    ${S.chores.map(c=>`
+      <div class="listrow">
+        <span class="dot" style="width:9px;height:9px;border-radius:50%;background:${bucket(c.bucket_id).color};flex:0 0 auto"></span>
+        <span class="grow">${esc(c.name)} <span class="sub num">· ${fmtDur(c.duration_min)}</span></span>
+        <button class="mini" data-editchore="${c.id}">Edit</button>
+      </div>`).join("")}
+    <div class="btnrow">
+      <button class="btn" data-act="signout">Sign out</button>
+      <button class="btn primary" data-act="savesettings">Save & close</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------- wiring ---------------- */
+function wire(){
+  document.querySelectorAll("[data-act]").forEach(el=>el.addEventListener("click", e=>{ e.stopPropagation(); act(el.dataset.act); }));
+  document.querySelectorAll(".chip[data-chore]").forEach(el=>{
+    el.addEventListener("click", ()=>armChore(el.dataset.chore));
+    let t; el.addEventListener("pointerdown",()=>{ t=setTimeout(()=>{ openChoreEditor(el.dataset.chore); t=null; },550); });
+    el.addEventListener("pointerup",()=>{ if(t) clearTimeout(t); });
+    el.addEventListener("pointerleave",()=>{ if(t) clearTimeout(t); });
+  });
+  document.querySelectorAll(".slots").forEach(el=>{
+    el.addEventListener("click", ev=>{
+      if(!S.armedChore || ev.target.closest(".block")) return;
+      const rect = el.getBoundingClientRect();
+      const min = snap(GRID_START + (ev.clientY-rect.top)/SLOT_H*SLOT);
+      placeBlock(S.armedChore, +el.dataset.day, min);
+      S.armedChore = null;
+    });
+  });
+  document.querySelectorAll(".block").forEach(el=>{
+    el.addEventListener("pointerdown", ev=>startDrag(ev, el));
+    el.addEventListener("click", ev=>{
+      if(S.drag && S.drag.moved){ return; }
+      const b=S.blocks.find(x=>x.id===el.dataset.block);
+      if(b){ S.editBlock={...b}; S.sheet="block"; render(); }
+    });
+  });
+  document.querySelectorAll("[data-step]").forEach(el=>el.addEventListener("click", ()=>step(el.dataset.step)));
+  document.querySelectorAll("[data-editchore]").forEach(el=>el.addEventListener("click", ()=>openChoreEditor(el.dataset.editchore)));
+}
+function snap(min){ return Math.max(GRID_START, Math.min(GRID_END-SLOT, Math.round(min/SLOT)*SLOT)); }
+function armChore(id){
+  const c = S.chores.find(x=>x.id===id);
+  S.armedChore = (S.armedChore && S.armedChore.id===id) ? null : c;
+  render();
+}
+function openChoreEditor(id){
+  S.editChore = {...S.chores.find(x=>x.id===id)}; S.armedChore=null; S.sheet="chore"; render();
+}
+function step(spec){
+  const [k,dv]=spec.split(":"); const d=+dv;
+  if(S.sheet==="block"){
+    if(k==="start"){ S.editBlock.start_min=snap(S.editBlock.start_min+d); $("#bStart").textContent=fmtTime(S.editBlock.start_min); }
+    if(k==="dur"){ S.editBlock.duration_min=Math.max(15,S.editBlock.duration_min+d); $("#bDur").textContent=fmtDur(S.editBlock.duration_min); }
+  }
+  if(S.sheet==="chore" && k==="cdur"){ S.editChore.duration_min=Math.max(5,(S.editChore.duration_min||30)+d); $("#cDur").textContent=fmtDur(S.editChore.duration_min); }
+}
+async function act(a){
+  if(a==="prev"||a==="next"){ S.weekStart=new Date(S.weekStart); S.weekStart.setDate(S.weekStart.getDate()+(a==="prev"?-7:7)); S.armedChore=null; await loadWeek(); }
+  if(a==="settings"){ S.sheet="settings"; render(); }
+  if(a==="closesheet"){ S.sheet=null; S.editBlock=null; S.editChore=null; render(); }
+  if(a==="addchore"){ S.editChore={name:"",duration_min:30,bucket_id:"cleaning"}; S.sheet="chore"; render(); }
+  if(a==="saveblock"){
+    const b=S.editBlock, live=S.blocks.find(x=>x.id===b.id);
+    const patch={day:+$("#bDay").value, start_min:b.start_min, duration_min:b.duration_min, bucket_id:$("#bBucket").value};
+    S.sheet=null; S.editBlock=null; await updateBlock(live,patch);
+  }
+  if(a==="delblock"){ const live=S.blocks.find(x=>x.id===S.editBlock.id); S.sheet=null; S.editBlock=null; await deleteBlock(live); }
+  if(a==="savechore"){
+    const c=S.editChore; c.name=$("#cName").value.trim()||"Untitled"; c.bucket_id=$("#cBucket").value;
+    S.sheet=null; S.editChore=null;
+    if(c.id){
+      const i=S.chores.findIndex(x=>x.id===c.id); S.chores[i]=c; render();
+      await sb.from("chores").update({name:c.name,duration_min:c.duration_min,bucket_id:c.bucket_id}).eq("id",c.id);
+    }else{
+      const {data,error}=await sb.from("chores").insert({name:c.name,duration_min:c.duration_min,bucket_id:c.bucket_id,sort:S.chores.length+1}).select().single();
+      if(!error){ S.chores.push(data); } render();
+    }
+  }
+  if(a==="delchore"){
+    const id=S.editChore.id; S.chores=S.chores.filter(x=>x.id!==id); S.sheet=null; S.editChore=null; render();
+    await sb.from("chores").delete().eq("id",id);
+  }
+  if(a==="savesettings"){
+    S.buckets.forEach((b,i)=>{
+      const n=document.querySelector(`[data-bname="${i}"]`); if(n) b.name=n.value.trim()||b.name;
+      const mn=document.querySelector(`[data-bmin="${i}"]`); if(mn) b.min=Math.max(0,+mn.value||0);
+      const mx=document.querySelector(`[data-bmax="${i}"]`); if(mx) b.max=Math.max(b.min,+mx.value||0);
+    });
+    S.sheet=null; render(); await saveBuckets(); toast("Targets saved");
+  }
+  if(a==="signout"){ await sb.auth.signOut(); S.session=null; render(); }
+}
+
+/* ---------------- drag (desktop + touch) ---------------- */
+function startDrag(ev, el){
+  const b = S.blocks.find(x=>x.id===el.dataset.block); if(!b) return;
+  const startY=ev.clientY, startX=ev.clientX;
+  S.drag={b, el, moved:false, origStart:b.start_min, origDay:b.day};
+  el.setPointerCapture(ev.pointerId);
+  const move = e=>{
+    const dy=e.clientY-startY, dx=e.clientX-startX;
+    if(!S.drag.moved && Math.abs(dy)<8 && Math.abs(dx)<8) return;
+    S.drag.moved=true; el.classList.add("dragging");
+    const newStart = snap(S.drag.origStart + dy/SLOT_H*SLOT);
+    el.style.top = ((newStart-GRID_START)/SLOT*SLOT_H)+"px";
+    S.drag.newStart=newStart;
+    // day change by horizontal position
+    const cols=[...document.querySelectorAll(".slots")];
+    const hit=cols.find(c=>{ const r=c.getBoundingClientRect(); return e.clientX>=r.left&&e.clientX<=r.right; });
+    if(hit && +hit.dataset.day!==S.drag.curDay){ S.drag.curDay=+hit.dataset.day; hit.appendChild(el); }
+  };
+  const up = async e=>{
+    window.removeEventListener("pointermove",move); window.removeEventListener("pointerup",up);
+    el.classList.remove("dragging");
+    if(S.drag && S.drag.moved){
+      const patch={ start_min:S.drag.newStart??b.start_min, day:S.drag.curDay??b.day };
+      const drag=S.drag; setTimeout(()=>{S.drag=null;},50);
+      await updateBlock(b,patch);
+    } else { setTimeout(()=>{S.drag=null;},50); }
+  };
+  window.addEventListener("pointermove",move); window.addEventListener("pointerup",up);
+}
+
+/* ---------------- auth ---------------- */
+function renderAuth(){
+  $("#app").innerHTML = `
+  <div class="auth">
+    <h1>THE WEEK</h1>
+    <p>Life allocation planner — sign in to plan your week.</p>
+    <input id="aEmail" type="email" placeholder="Email" autocomplete="username">
+    <input id="aPass" type="password" placeholder="Password" autocomplete="current-password">
+    <div class="err" id="aErr"></div>
+    <button class="btn primary" style="width:100%" id="aGo">Sign in</button>
+  </div>`;
+  $("#aGo").addEventListener("click", async ()=>{
+    $("#aErr").textContent="";
+    const {data,error} = await sb.auth.signInWithPassword({email:$("#aEmail").value.trim(), password:$("#aPass").value});
+    if(error){ $("#aErr").textContent=error.message; return; }
+    S.session=data.session; await loadAll();
+  });
+  $("#aPass").addEventListener("keydown",e=>{ if(e.key==="Enter") $("#aGo").click(); });
+}
+
+/* ---------------- boot ---------------- */
+(async function(){
+  S.weekStart = sundayOf(new Date());
+  const {data} = await sb.auth.getSession();
+  if(data && data.session){ S.session=data.session; await loadAll(); } else render();
+  sb.auth.onAuthStateChange((_e, sess)=>{ if(!sess){ S.session=null; render(); } });
+})();
+</script>
+</body>
+</html>
